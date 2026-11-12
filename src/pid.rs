@@ -64,6 +64,23 @@ impl Pid {
         }
     }
 
+    /// Change the tuning while the controller is running.
+    ///
+    /// The window demo calls these when a slider moves. They are the only
+    /// way to modify the private fields from outside this file.
+    pub fn set_gains(&mut self, gains: Gains) {
+        self.gains = gains;
+    }
+
+    pub fn set_mode(&mut self, mode: Mode) {
+        if mode != self.mode {
+            // Start the new mode with a clean integral so that whatever
+            // the previous mode accumulated does not cause a jump.
+            self.integral = 0.0;
+            self.mode = mode;
+        }
+    }
+
     /// Compute one control step and return the new output.
     ///
     /// `&mut self` means "I need exclusive, mutable access to this Pid".

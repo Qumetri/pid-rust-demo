@@ -7,14 +7,12 @@
 //! On the Raspberry Pi the display side becomes the touchscreen UI and
 //! the plant becomes real sensors and pumps; the shape stays the same.
 
-// `mod` tells the compiler that src/pid.rs and src/plant.rs are part of
-// this program. There are no header files and no #include.
-mod pid;
-mod plant;
-
-// `use` shortens names, like `using` in C++.
-use pid::{Gains, Mode, Pid};
-use plant::{Plant, WaterTank};
+// The controller and the tank live in the library (src/lib.rs), which is
+// named after the package with dashes turned into underscores. There are
+// no header files and no #include; `use` brings names into scope, like
+// `using` in C++.
+use pid_rust_demo::pid::{Gains, Mode, Pid};
+use pid_rust_demo::plant::{Plant, WaterTank};
 use std::sync::mpsc; // "multi-producer, single-consumer" channel
 use std::thread;
 use std::time::Duration;

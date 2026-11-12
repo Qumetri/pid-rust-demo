@@ -45,6 +45,15 @@ impl WaterTank {
     }
 }
 
+// `Default` is the standard trait for "a sensible default value". Types
+// with a no-argument `new` conventionally implement it too, so generic
+// code can create one with `WaterTank::default()`.
+impl Default for WaterTank {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 // This block is what makes WaterTank usable wherever a Plant is expected.
 impl Plant for WaterTank {
     fn step(&mut self, control: f64, dt: f64) {

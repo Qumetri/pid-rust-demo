@@ -7,8 +7,12 @@ version = "0.1.0"
 # The "edition" selects the language dialect. 2021 is supported by every
 # Rust toolchain from the last few years, so it builds anywhere.
 edition = "2021"
+# The package has two programs: src/main.rs (terminal) and src/bin/ui.rs
+# (window). This line says which one a plain `cargo run` starts.
+default-run = "pid-rust-demo"
 
-# No dependencies on purpose: the demo uses only the standard library, so
-# the first build takes a few seconds and needs no network access.
-# Later, `cargo add <crate>` will add lines here.
+# Slint is the UI toolkit planned for the real project, so the window demo
+# uses it too. It is the only dependency; the first build downloads and
+# compiles it, which takes a few minutes once and is cached afterwards.
 [dependencies]
+slint = "1.18"
