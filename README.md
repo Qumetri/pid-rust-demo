@@ -57,8 +57,11 @@ The simulation runs continuously in real time. The plot shows the last
 follow, switch the mode, and drag the gains while it runs:
 
 - Mode `P`: the level stops short of the setpoint.
-- High `Ki` (0.3 and up): overshoot and slow oscillation.
-- `Kp`, `Ki` and `Kd` at zero: the pump stops and the tank drains.
+- High `Ki` (0.3 and up) with low `Kp`: about 2 cm of overshoot and a
+  swing below the setpoint before it settles.
+- All gains at zero in mode `P`: the pump stops and the tank drains.
+- All gains at zero in mode `PI` or `PID`: the pump holds its last value,
+  because the integral term remembers what it accumulated.
 
 On Linux the window demo also needs the fontconfig development package
 (`libfontconfig-dev` on Debian/Ubuntu). macOS needs nothing extra.
@@ -78,7 +81,8 @@ On Linux the window demo also needs the fontconfig development package
 Ordered from easy to harder. The compiler's error messages are unusually
 helpful, so read them fully when something does not build.
 
-1. Change the gains in `main.rs` until the tank overshoots and oscillates.
+1. Change the gains in `main.rs` until the tank clearly overshoots the
+   setpoint.
 2. Add a `Pd` variant to `Mode` in `pid.rs`. The compiler will list every
    place that needs updating.
 3. Read the gains from the command line (`cargo run -- pid 0.2 0.05 0.0`).
