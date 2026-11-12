@@ -1,0 +1,14 @@
+# Cargo.toml is the project manifest: name, version, and dependencies.
+# It plays the role of CMakeLists.txt plus a package list.
+
+[package]
+name = "pid-rust-demo"
+version = "0.1.0"
+# The "edition" selects the language dialect. 2021 is supported by every
+# Rust toolchain from the last few years, so it builds anywhere.
+edition = "2021"
+
+# No dependencies on purpose: the demo uses only the standard library, so
+# the first build takes a few seconds and needs no network access.
+# Later, `cargo add <crate>` will add lines here.
+[dependencies]

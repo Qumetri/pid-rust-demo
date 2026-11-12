@@ -1,0 +1,192 @@
+//! The PID controller itself.
+//!
+//! This file is pure maths: no printing, no threads, no hardware. Keeping
+//! it that way makes it trivial to unit-test (see the bottom of the file)
+//! and lets the real project reuse it unchanged.
+
+/// Which terms of the controller are active.
+///
+/// A Rust `enum` is a closed list of alternatives. The compiler forces
+/// every `match` on it to handle all variants, so adding a new mode later
+/// produces compile errors at each place that needs updating.
+///
+/// `derive` asks the compiler to generate common behaviour for us:
+/// - `Debug`     lets us print the value with `{:?}`
+/// - `Clone/Copy` make it cheap to pass by value, like an `int` in C++
+/// - `PartialEq` enables `==`
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Mode {
+    P,
+    Pi,
+    Pid,
+}
+
+/// Tuning values. A plain struct with public fields, like a C++ struct.
+#[derive(Debug, Clone, Copy)]
+pub struct Gains {
+    pub kp: f64,
+    pub ki: f64,
+    pub kd: f64,
+}
+
+/// The controller state.
+///
+/// Fields are private (no `pub`), so code outside this file can only use
+/// the methods below. That is how Rust does encapsulation: privacy is per
+/// module (file), not per class.
+pub struct Pid {
+    mode: Mode,
+    gains: Gains,
+    /// Output limits, e.g. 0.0..=1.0 for "pump off" to "pump full".
+    out_min: f64,
+    out_max: f64,
+    /// Running sum for the I term.
+    integral: f64,
+    /// Previous measurement, needed for the D term.
+    ///
+    /// `Option<f64>` means "either a number or nothing". Rust has no null;
+    /// on the very first update there is no previous value, and the type
+    /// makes us handle that case explicitly instead of reading garbage.
+    last_measurement: Option<f64>,
+}
+
+impl Pid {
+    /// Constructor. By convention it is an ordinary function called `new`;
+    /// Rust has no special constructor syntax.
+    pub fn new(mode: Mode, gains: Gains, out_min: f64, out_max: f64) -> Self {
+        Pid {
+            mode,
+            gains,
+            out_min,
+            out_max,
+            integral: 0.0,
+            last_measurement: None,
+        }
+    }
+
+    /// Compute one control step and return the new output.
+    ///
+    /// `&mut self` means "I need exclusive, mutable access to this Pid".
+    /// The compiler guarantees nobody else is reading or writing it at the
+    /// same time, which is what makes Rust threads safe later on.
+    ///
+    /// `dt` is the time since the previous call, in seconds.
+    pub fn update(&mut self, setpoint: f64, measurement: f64, dt: f64) -> f64 {
+        let error = setpoint - measurement;
+
+        // --- P term: react to the current error.
+        let p = self.gains.kp * error;
+
+        // --- D term: react to how fast the measurement is changing.
+        //
+        // Design choice: we differentiate the *measurement*, not the error.
+        // If we used the error, a sudden setpoint change would look like an
+        // infinitely fast change and produce a huge output spike
+        // ("derivative kick").
+        //
+        // `match` on an Option: both cases must be covered.
+        let d = match self.last_measurement {
+            Some(previous) => -self.gains.kd * (measurement - previous) / dt,
+            None => 0.0, // first call: no history yet
+        };
+        self.last_measurement = Some(measurement);
+
+        // --- I term: remove the steady error that P alone leaves behind.
+        // We compute a candidate integral first and only keep it if allowed
+        // (see anti-windup below).
+        let candidate_integral = self.integral + self.gains.ki * error * dt;
+
+        // Pick the active terms. `match` is an expression: it returns a
+        // value, so we can assign its result directly.
+        let (unclamped, uses_integral) = match self.mode {
+            Mode::P => (p, false),
+            Mode::Pi => (p + candidate_integral, true),
+            Mode::Pid => (p + candidate_integral + d, true),
+        };
+
+        let output = unclamped.clamp(self.out_min, self.out_max);
+
+        // --- Anti-windup.
+        // A pump cannot do more than 100 %. If the output is already
+        // pinned at a limit and we kept integrating, the integral would
+        // grow without bound and take a long time to unwind, causing a big
+        // overshoot. So: only accept the new integral when the output is
+        // not saturated, or when the error is pulling it back inside.
+        if uses_integral {
+            let saturated_high = unclamped > self.out_max && error > 0.0;
+            let saturated_low = unclamped < self.out_min && error < 0.0;
+            if !saturated_high && !saturated_low {
+                self.integral = candidate_integral;
+            }
+        }
+
+        output // last expression without `;` is the return value
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Unit tests live next to the code. `#[cfg(test)]` means this module is only
+// compiled for `cargo test`, so it adds nothing to the real program.
+// ---------------------------------------------------------------------------
+#[cfg(test)]
+mod tests {
+    use super::*; // bring Pid, Mode, Gains into scope
+
+    const GAINS: Gains = Gains {
+        kp: 2.0,
+        ki: 1.0,
+        kd: 0.5,
+    };
+
+    #[test]
+    fn p_mode_is_proportional_to_error() {
+        let mut pid = Pid::new(Mode::P, GAINS, -100.0, 100.0);
+        // error = 3, kp = 2  ->  output 6
+        assert_eq!(pid.update(10.0, 7.0, 0.1), 6.0);
+    }
+
+    #[test]
+    fn output_respects_limits() {
+        let mut pid = Pid::new(Mode::P, GAINS, 0.0, 1.0);
+        assert_eq!(pid.update(100.0, 0.0, 0.1), 1.0);
+        assert_eq!(pid.update(-100.0, 0.0, 0.1), 0.0);
+    }
+
+    #[test]
+    fn integral_accumulates_over_time() {
+        let mut pid = Pid::new(Mode::Pi, GAINS, -100.0, 100.0);
+        let first = pid.update(1.0, 0.0, 0.1);
+        let second = pid.update(1.0, 0.0, 0.1);
+        // Same error both times, so only the growing I term can raise it.
+        assert!(second > first);
+    }
+
+    #[test]
+    fn integral_does_not_wind_up_while_saturated() {
+        let mut pid = Pid::new(Mode::Pi, GAINS, 0.0, 1.0);
+        // Hold a large error for a long time; output is pinned at 1.0.
+        for _ in 0..1000 {
+            pid.update(100.0, 0.0, 0.1);
+        }
+        // The error flips sign. Without anti-windup the stored integral
+        // would keep the output at 1.0 for many more steps.
+        assert_eq!(pid.update(0.0, 1.0, 0.1), 0.0);
+    }
+
+    #[test]
+    fn no_derivative_kick_on_setpoint_change() {
+        let mut pid = Pid::new(
+            Mode::Pid,
+            Gains {
+                kp: 0.0,
+                ki: 0.0,
+                kd: 5.0,
+            },
+            -100.0,
+            100.0,
+        );
+        pid.update(0.0, 1.0, 0.1);
+        // Setpoint jumps, measurement does not move: D term must stay zero.
+        assert_eq!(pid.update(50.0, 1.0, 0.1), 0.0);
+    }
+}
