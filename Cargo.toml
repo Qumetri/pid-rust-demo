@@ -17,6 +17,14 @@ default-run = "pid-rust-demo"
 [dependencies]
 slint = "1.19"
 
+# `libc` gives access to the C library's `ioctl`, which is how a Linux
+# program selects the device address on an I2C bus (src/hw/i2c.rs). It is
+# already used inside Slint, so it adds no build time. It only exists on
+# Linux, so it is a Linux-only dependency: the window demo still builds on
+# a Mac or PC.
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = "0.2"
+
 # Optional features, switched on with `cargo build --features kms`.
 # `kms` adds Slint's linuxkms backend: it draws straight to the screen
 # through DRM/KMS and reads touch through libinput, with no desktop.
