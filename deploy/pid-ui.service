@@ -15,11 +15,16 @@ Conflicts=getty@tty1.service
 
 [Service]
 User=pidcontroller
-# Access to the display (video, render) and the touchscreen (input).
-SupplementaryGroups=video render input
+# Access to the display (video, render), the touchscreen (input) and the
+# sensors (gpio for the GPIO pins, i2c for the I2C sensors added later).
+SupplementaryGroups=video render input gpio i2c
 WorkingDirectory=/home/pidcontroller/PIDproject/pid-rust-demo
 # Runs whatever was built last with `cargo build --release --features kms`.
 ExecStart=/home/pidcontroller/PIDproject/pid-rust-demo/target/release/ui
+# After the program ends for any reason (stop, crash, kill), switch every
+# real output off: pumps to 0 % duty, DAC to 0 V. A killed program cannot
+# do this itself.
+ExecStopPost=/home/pidcontroller/PIDproject/pid-rust-demo/target/release/ui --safe-outputs
 Environment=SLINT_BACKEND=linuxkms-femtovg
 Environment=SLINT_SCALE_FACTOR=2
 # Restart if it crashes, or if it started before the display was ready.
