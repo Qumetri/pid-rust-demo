@@ -1,0 +1,30 @@
+# systemd service: starts the touchscreen UI at boot, fullscreen on the
+# DSI panel, with no desktop.
+#
+# Install:  sudo cp deploy/pid-ui.service /etc/systemd/system/
+#           sudo systemctl daemon-reload
+#           sudo systemctl enable --now pid-ui.service
+# Logs:     journalctl -u pid-ui -f
+# Restart after a new build:  sudo systemctl restart pid-ui
+
+[Unit]
+Description=PID controller touchscreen UI
+After=systemd-user-sessions.service
+# The UI takes over the panel, so do not show a login prompt on it.
+Conflicts=getty@tty1.service
+
+[Service]
+User=pidcontroller
+# Access to the display (video, render) and the touchscreen (input).
+SupplementaryGroups=video render input
+WorkingDirectory=/home/pidcontroller/PIDproject/pid-rust-demo
+# Runs whatever was built last with `cargo build --release --features kms`.
+ExecStart=/home/pidcontroller/PIDproject/pid-rust-demo/target/release/ui
+Environment=SLINT_BACKEND=linuxkms-femtovg
+Environment=SLINT_SCALE_FACTOR=2
+# Restart if it crashes, or if it started before the display was ready.
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target
