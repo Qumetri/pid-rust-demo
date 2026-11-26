@@ -81,6 +81,18 @@ impl Pid {
         }
     }
 
+    /// Forget the controller's history: the accumulated integral and the
+    /// previous measurement.
+    ///
+    /// Called when the input changes (another sensor, or a sensor that
+    /// came back after a failure). Without it the D term would see a jump
+    /// between two unrelated measurements, and the integral would carry
+    /// over a value built up for a different signal.
+    pub fn reset(&mut self) {
+        self.integral = 0.0;
+        self.last_measurement = None;
+    }
+
     /// Compute one control step and return the new output.
     ///
     /// `&mut self` means "I need exclusive, mutable access to this Pid".
@@ -188,6 +200,17 @@ mod tests {
         // The error flips sign. Without anti-windup the stored integral
         // would keep the output at 1.0 for many more steps.
         assert_eq!(pid.update(0.0, 1.0, 0.1), 0.0);
+    }
+
+    #[test]
+    fn reset_clears_integral_and_derivative_history() {
+        let mut pid = Pid::new(Mode::Pid, GAINS, -100.0, 100.0);
+        pid.update(1.0, 0.0, 0.1);
+        pid.update(1.0, 0.0, 0.1);
+        pid.reset();
+        // A fresh controller gives exactly the same first output.
+        let mut fresh = Pid::new(Mode::Pid, GAINS, -100.0, 100.0);
+        assert_eq!(pid.update(1.0, 5.0, 0.1), fresh.update(1.0, 5.0, 0.1));
     }
 
     #[test]
