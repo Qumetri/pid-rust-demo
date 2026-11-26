@@ -20,6 +20,14 @@ pub trait Plant: Send {
     /// Read the process value (what a sensor would report).
     /// `&self` = read-only access; this method cannot modify the plant.
     fn measure(&self) -> f64;
+
+    /// Set a disturbance in 0.0..=1.0, such as a second pump draining the
+    /// tank. It lets the demo show how the controller rejects a load
+    /// change.
+    ///
+    /// A trait method can have a default body. Plants without a
+    /// disturbance simply inherit this one, which does nothing.
+    fn set_disturbance(&mut self, _amount: f64) {}
 }
 
 /// A water tank filled by a pump, with a drain hole at the bottom.
@@ -32,6 +40,8 @@ pub struct WaterTank {
     pump_max_flow: f64,
     /// How fast water leaves through the drain (bigger = faster).
     drain_coeff: f64,
+    /// Extra outflow from a second (drain) pump, 0.0..=1.0 of full power.
+    disturbance: f64,
 }
 
 impl WaterTank {
@@ -41,6 +51,7 @@ impl WaterTank {
             area_cm2: 50.0,
             pump_max_flow: 300.0,
             drain_coeff: 20.0,
+            disturbance: 0.0,
         }
     }
 }
@@ -64,13 +75,25 @@ impl Plant for WaterTank {
         // differently at different levels - a nice thing to demonstrate.
         let outflow = self.drain_coeff * self.level_cm.max(0.0).sqrt();
 
+        // The drain pump can only remove water that is there; at an empty
+        // tank it just runs dry.
+        let pumped_out = if self.level_cm > 0.0 {
+            self.disturbance * self.pump_max_flow * 0.5
+        } else {
+            0.0
+        };
+
         // Volume change divided by area gives level change.
-        self.level_cm += (inflow - outflow) / self.area_cm2 * dt;
+        self.level_cm += (inflow - outflow - pumped_out) / self.area_cm2 * dt;
         self.level_cm = self.level_cm.max(0.0); // a tank cannot be less than empty
     }
 
     fn measure(&self) -> f64 {
         self.level_cm
+    }
+
+    fn set_disturbance(&mut self, amount: f64) {
+        self.disturbance = amount.clamp(0.0, 1.0);
     }
 }
 
@@ -96,5 +119,18 @@ mod tests {
             tank.step(0.0, 0.1);
         }
         assert!(tank.measure() < full);
+    }
+
+    #[test]
+    fn disturbance_lowers_the_level() {
+        let run = |disturbance: f64| {
+            let mut tank = WaterTank::new();
+            tank.set_disturbance(disturbance);
+            for _ in 0..200 {
+                tank.step(0.5, 0.1);
+            }
+            tank.measure()
+        };
+        assert!(run(0.5) < run(0.0));
     }
 }
