@@ -12,7 +12,16 @@ edition = "2021"
 default-run = "pid-rust-demo"
 
 # Slint is the UI toolkit planned for the real project, so the window demo
-# uses it too. It is the only dependency; the first build downloads and
-# compiles it, which takes a few minutes once and is cached afterwards.
+# uses it too. The first build downloads and compiles it, which takes a
+# few minutes once and is cached afterwards.
 [dependencies]
-slint = "1.18"
+slint = "1.19"
+
+# Optional features, switched on with `cargo build --features kms`.
+# `kms` adds Slint's linuxkms backend: it draws straight to the screen
+# through DRM/KMS and reads touch through libinput, with no desktop.
+# That is how the program runs on the Raspberry Pi with Pi OS Lite. The
+# normal window backend stays enabled, so the same binary still opens a
+# window on a Mac or PC.
+[features]
+kms = ["slint/backend-linuxkms-noseat", "slint/renderer-femtovg"]
