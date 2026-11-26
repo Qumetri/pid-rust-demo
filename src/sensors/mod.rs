@@ -18,6 +18,8 @@
 //! The screen and the control loop pick the new sensor up from the list.
 
 pub mod dht22;
+pub mod flow;
+pub mod mpu6050;
 pub mod ultrasonic;
 
 use std::sync::{Arc, Mutex};
@@ -31,7 +33,9 @@ use std::time::{Duration, Instant};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SensorId {
     Ultrasonic = 0,
-    Dht22 = 1,
+    Flow = 1,
+    Dht22 = 2,
+    Mpu6050 = 3,
 }
 
 /// One quantity a sensor reports, such as "Temperature in °C".
@@ -66,7 +70,11 @@ pub struct SensorInfo {
 }
 
 /// The supported sensors. Order must match the `SensorId` numbers.
-pub const SENSORS: [SensorInfo; 2] = [
+///
+/// Pins are chosen to leave I2C (GPIO2/3), the hardware PWM pins
+/// (GPIO12/13) and the serial console (GPIO14/15) free. The full pin plan
+/// is in docs/IO-MAP.md.
+pub const SENSORS: [SensorInfo; 4] = [
     SensorInfo {
         id: SensorId::Ultrasonic,
         name: "Ultrasonic RCWL-1601",
@@ -94,6 +102,32 @@ pub const SENSORS: [SensorInfo; 2] = [
         stale_after: Duration::from_millis(500),
     },
     SensorInfo {
+        id: SensorId::Flow,
+        name: "Flow sensor WPSE470",
+        wiring: "Signal GPIO17 (pin 11) via divider, VCC 5 V",
+        signals: &[
+            // The inner loop of the planned cascade demo, or a loop of
+            // its own: hold a flow rate with the pump.
+            Signal {
+                name: "Flow",
+                label: "Flow rate",
+                unit: "l/min",
+                max: 10.0,
+                controllable: true,
+            },
+            // For calibration: let 1 litre through and compare.
+            Signal {
+                name: "Total",
+                label: "Total flow",
+                unit: "l",
+                max: 100.0,
+                controllable: false,
+            },
+        ],
+        period: Duration::from_millis(500),
+        stale_after: Duration::from_secs(2),
+    },
+    SensorInfo {
         id: SensorId::Dht22,
         name: "DHT-22 temperature / humidity",
         wiring: "Data GPIO4 (pin 7), VCC 3.3 V, 10 kΩ pull-up",
@@ -118,6 +152,37 @@ pub const SENSORS: [SensorInfo; 2] = [
         period: Duration::from_secs(2),
         stale_after: Duration::from_secs(10),
     },
+    SensorInfo {
+        id: SensorId::Mpu6050,
+        name: "GY-521 gyroscope (MPU6050)",
+        wiring: "I2C 0x68: SDA GPIO2 (pin 3), SCL GPIO3 (pin 5)",
+        // Monitoring only until its role in the rig is decided.
+        signals: &[
+            Signal {
+                name: "Tilt",
+                label: "Tilt",
+                unit: "°",
+                max: 90.0,
+                controllable: false,
+            },
+            Signal {
+                name: "Rotation",
+                label: "Rotation",
+                unit: "°/s",
+                max: 250.0,
+                controllable: false,
+            },
+            Signal {
+                name: "Vibration",
+                label: "Vibration",
+                unit: "g",
+                max: 2.0,
+                controllable: false,
+            },
+        ],
+        period: Duration::from_millis(100),
+        stale_after: Duration::from_millis(500),
+    },
 ];
 
 /// The interface every sensor driver implements.
@@ -135,7 +200,9 @@ pub trait Driver: Send {
 fn open_driver(id: SensorId) -> Result<Box<dyn Driver>, String> {
     match id {
         SensorId::Ultrasonic => Ok(Box::new(ultrasonic::Ultrasonic::open()?)),
+        SensorId::Flow => Ok(Box::new(flow::Flow::open()?)),
         SensorId::Dht22 => Ok(Box::new(dht22::Dht22::open()?)),
+        SensorId::Mpu6050 => Ok(Box::new(mpu6050::Mpu6050::open()?)),
     }
 }
 
@@ -368,6 +435,7 @@ mod tests {
             }
         )));
         assert_eq!(list[1].label(), "Ultrasonic level");
+        assert_eq!(list[2].label(), "Flow rate");
     }
 
     #[test]
