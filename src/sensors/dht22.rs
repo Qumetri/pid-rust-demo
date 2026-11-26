@@ -13,7 +13,7 @@
 //!
 //! The kernel then creates a directory such as
 //! /sys/bus/iio/devices/iio:device0 with:
-//!     name                        "dht11"
+//!     name                        "dht11@4" (older kernels: "dht11")
 //!     in_temp_input               temperature in thousandths of a °C
 //!     in_humidityrelative_input   humidity in thousandths of a %
 //! Reading `in_temp_input` triggers a measurement; the driver caches the
@@ -37,7 +37,7 @@ impl Dht22 {
         })
     }
 
-    /// Look through the IIO devices for the one named "dht11".
+    /// Look through the IIO devices for the DHT driver's one.
     ///
     /// Takes the directory as a parameter so a test can point it at a
     /// fake directory instead of the real /sys.
@@ -46,7 +46,7 @@ impl Dht22 {
         for entry in fs::read_dir(devices).ok()?.flatten() {
             let dir = entry.path();
             let name = fs::read_to_string(dir.join("name")).unwrap_or_default();
-            if name.trim() == "dht11" {
+            if is_dht_device_name(name.trim()) {
                 return Some(Dht22 { dir });
             }
         }
@@ -63,6 +63,12 @@ impl Dht22 {
         })?;
         parse_milli(&text)
     }
+}
+
+/// The kernel names the device "dht11@<pin>", for example "dht11@4" on
+/// kernel 6.18; older kernels used just "dht11".
+pub fn is_dht_device_name(name: &str) -> bool {
+    name == "dht11" || name.starts_with("dht11@")
 }
 
 /// "21400\n" -> 21.4
@@ -101,6 +107,14 @@ mod tests {
     }
 
     #[test]
+    fn recognises_both_device_names() {
+        assert!(is_dht_device_name("dht11@4"));
+        assert!(is_dht_device_name("dht11"));
+        assert!(!is_dht_device_name("dht12"));
+        assert!(!is_dht_device_name("iio_hwmon@4"));
+    }
+
+    #[test]
     fn finds_the_device_by_name_and_reads_it() {
         // Build a fake /sys/bus/iio/devices in a temporary directory.
         let root = std::env::temp_dir().join(format!("dht22-test-{}", std::process::id()));
@@ -109,7 +123,7 @@ mod tests {
         fs::create_dir_all(&other).unwrap();
         fs::create_dir_all(&dht).unwrap();
         fs::write(other.join("name"), "something-else\n").unwrap();
-        fs::write(dht.join("name"), "dht11\n").unwrap();
+        fs::write(dht.join("name"), "dht11@4\n").unwrap();
         fs::write(dht.join("in_temp_input"), "22500\n").unwrap();
         fs::write(dht.join("in_humidityrelative_input"), "41300\n").unwrap();
 
