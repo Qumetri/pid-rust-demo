@@ -9,6 +9,7 @@
 //! and visible to its users.
 
 pub mod hw;
+pub mod outputs;
 pub mod pid;
 pub mod plant;
 pub mod sensors;
