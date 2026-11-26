@@ -11,3 +11,4 @@
 pub mod hw;
 pub mod pid;
 pub mod plant;
+pub mod sensors;

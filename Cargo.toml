@@ -17,12 +17,16 @@ default-run = "pid-rust-demo"
 [dependencies]
 slint = "1.19"
 
+# GPIO access through the Linux GPIO character device (/dev/gpiochip*),
+# used by the ultrasonic sensor driver. It only exists on Linux, so it is
+# a Linux-only dependency: the window demo still builds on a Mac or PC,
+# where the sensor screen then reports the GPIO sensors as unavailable.
+#
 # `libc` gives access to the C library's `ioctl`, which is how a Linux
 # program selects the device address on an I2C bus (src/hw/i2c.rs). It is
-# already used inside Slint, so it adds no build time. It only exists on
-# Linux, so it is a Linux-only dependency: the window demo still builds on
-# a Mac or PC.
+# already used inside Slint, so it adds no build time.
 [target.'cfg(target_os = "linux")'.dependencies]
+gpiocdev = "0.8"
 libc = "0.2"
 
 # Optional features, switched on with `cargo build --features kms`.
