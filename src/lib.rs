@@ -13,3 +13,4 @@ pub mod outputs;
 pub mod pid;
 pub mod plant;
 pub mod sensors;
+pub mod stats;
