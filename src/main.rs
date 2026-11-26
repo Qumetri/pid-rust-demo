@@ -42,7 +42,7 @@ fn main() {
         Ok(mode) => mode,
         Err(message) => {
             eprintln!("{message}");
-            eprintln!("usage: cargo run -- [p|pi|pid]");
+            eprintln!("usage: cargo run -- [p|pi|pd|pid]");
             std::process::exit(1);
         }
     };
@@ -149,6 +149,7 @@ fn parse_mode(argument: Option<String>) -> Result<Mode, String> {
         None => Ok(Mode::Pid), // default when nothing is given
         Some("p") => Ok(Mode::P),
         Some("pi") => Ok(Mode::Pi),
+        Some("pd") => Ok(Mode::Pd),
         Some("pid") => Ok(Mode::Pid),
         Some(other) => Err(format!("unknown mode '{other}'")),
     }
