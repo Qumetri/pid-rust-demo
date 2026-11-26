@@ -6,11 +6,13 @@
 //! Safe stop:    `ui --safe-outputs` switches every real output off and
 //!               exits; the service runs it after the program stops.
 //!
-//! Three pages, chosen with tabs at the bottom:
+//! Four pages, chosen with tabs at the bottom:
 //!   Control  plot, auto/manual, setpoint, output, disturbance, input
 //!            and output selection
 //!   Tuning   mode, gains, action, anti-windup, derivative filter, limits
 //!   Sensors  every sensor and output with its wiring and live state
+//!   Stats    CPU, memory, storage, network and power of the Pi, sampled
+//!            only while the page is open
 //!
 //! Structure:
 //!
@@ -21,15 +23,19 @@
 //!     |      +------ history of samples ----+   (plot, redrawn by a timer)
 //!     +-- drives the real outputs, state --> OutputBoard
 //!
+//!   stats thread (asleep unless the Stats page is open) --> latest snapshot
+//!
 //! Every arrow goes through a shared, lock-protected struct.
 
 use pid_rust_demo::outputs::{self, Output, OutputBoard, OutputId, Slot, OUTPUTS};
 use pid_rust_demo::pid::{Action, Gains, Mode, Options, Pid};
 use pid_rust_demo::plant::{Plant, WaterTank};
 use pid_rust_demo::sensors::{self, Health, Input, SensorBoard, SensorInfo, SENSORS};
+use pid_rust_demo::stats::{Sampler, Snapshot};
 use slint::{Model, ModelRc, SharedString, VecModel};
 use std::collections::VecDeque;
 use std::rc::Rc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
@@ -65,6 +71,16 @@ slint::slint! {
         // Sensors have an on/off switch; outputs follow the selection.
         has-switch: bool,
         enabled: bool,
+    }
+
+    // One line on the Stats page: a section heading, or a label and a
+    // value. Generates the Rust struct `StatRow`.
+    export struct StatRow {
+        heading: bool,
+        label: string,
+        value: string,
+        // 0 normal, 1 warning (amber), 2 problem (red).
+        level: int,
     }
 
     // A reusable row: name on the left, slider in the middle, value on the right.
@@ -267,6 +283,35 @@ slint::slint! {
         }
     }
 
+    // One line of the Stats page. Headings are bold and have more space
+    // above them.
+    component StatLine inherits HorizontalLayout {
+        in property <StatRow> line;
+
+        spacing: 8px;
+        padding-top: root.line.heading ? 10px : 0px;
+        // Headings need room for the larger bold text plus the gap above.
+        min-height: root.line.heading ? 34px : 22px;
+        Text {
+            text: root.line.label;
+            width: root.line.heading ? 300px : 104px;
+            font-size: root.line.heading ? 15px : 13px;
+            font-weight: root.line.heading ? 700 : 400;
+            vertical-alignment: center;
+        }
+        Text {
+            text: root.line.value;
+            font-size: 13px;
+            horizontal-stretch: 1;
+            horizontal-alignment: right;
+            vertical-alignment: center;
+            wrap: word-wrap;
+            color: root.line.level == 2 ? #f85149
+                : root.line.level == 1 ? #d29922
+                : Palette.foreground;
+        }
+    }
+
     export component MainWindow inherits Window {
         title: "PID controller";
         preferred-width: 360px;
@@ -279,6 +324,9 @@ slint::slint! {
         in property <string> status;
         in property <[DeviceRow]> sensors;
         in property <[DeviceRow]> outputs;
+        // Stats page: the lines, and the CPU graph as an SVG path.
+        in property <[StatRow]> stats;
+        in property <string> cpu-path;
         // Choices for the input and output drop-downs.
         in property <[string]> input-names;
         in property <[string]> output-names;
@@ -309,8 +357,10 @@ slint::slint! {
         in-out property <float> out-max: 1;
         callback settings-changed();
         callback sensor-toggled(int, bool);
+        // Fired when a tab is tapped, so Rust can start or stop the stats.
+        callback page-changed(int);
 
-        // Which page is shown: 0 Control, 1 Tuning, 2 Sensors.
+        // Which page is shown: 0 Control, 1 Tuning, 2 Sensors, 3 Stats.
         in-out property <int> page: 0;
 
         VerticalBox {
@@ -543,23 +593,65 @@ slint::slint! {
                 }
             }
 
+            // ---------------------------------------------------------------
+            // Page 3: Stats. Rust only samples while this page is open.
+            if root.page == 3 : ScrollView {
+                vertical-stretch: 1;
+
+                VerticalLayout {
+                    spacing: 2px;
+                    // Keep the values clear of the scroll bar.
+                    padding-right: 12px;
+
+                    Heading { text: "CPU usage, last 60 s"; }
+                    Rectangle {
+                        background: #14181d;
+                        border-radius: 6px;
+                        height: 80px;
+                        clip: true;
+
+                        PlotLine { commands: root.cpu-path; stroke: #3fb950; }
+                        Text {
+                            x: 6px;
+                            y: 4px;
+                            text: "100 %";
+                            font-size: 11px;
+                            color: #8b949e;
+                        }
+                    }
+                    for line in root.stats : StatLine {
+                        line: line;
+                    }
+                    Text {
+                        text: "Updated every second while this page is open.";
+                        font-size: 11px;
+                        opacity: 0.6;
+                    }
+                }
+            }
+
             // --- Page tabs, always at the bottom.
             HorizontalLayout {
-                spacing: 8px;
+                spacing: 6px;
                 TouchButton {
                     text: "Control";
                     active: root.page == 0;
-                    clicked => { root.page = 0; }
+                    clicked => { root.page = 0; root.page-changed(0); }
                 }
                 TouchButton {
                     text: "Tuning";
                     active: root.page == 1;
-                    clicked => { root.page = 1; }
+                    clicked => { root.page = 1; root.page-changed(1); }
                 }
                 TouchButton {
                     text: "Sensors";
                     active: root.page == 2;
-                    clicked => { root.page = 2; }
+                    clicked => { root.page = 2; root.page-changed(2); }
+                }
+                TouchButton {
+                    text: "Stats";
+                    active: root.page == 3;
+                    clicked => { root.page = 3; root.page-changed(3); }
                 }
             }
         }
@@ -620,6 +712,11 @@ type SharedState = Arc<Mutex<Shared>>;
 const DT: f64 = 0.05; // control period: 20 Hz, in real time
 const HISTORY_SECONDS: f64 = 30.0; // how much the plot shows
 const HISTORY_LEN: usize = (HISTORY_SECONDS / DT) as usize;
+
+/// The Stats page's number in the `page` property.
+const STATS_PAGE: i32 = 3;
+/// The CPU graph on the Stats page shows this many one-second samples.
+const CPU_HISTORY_LEN: usize = 60;
 
 /// Output used in automatic while the selected input has no fresh
 /// reading. Off is the safe choice for a pump: the tank cannot overflow.
@@ -786,6 +883,33 @@ fn main() -> Result<(), slint::PlatformError> {
         }
     });
 
+    // --- Stats page: a thread that samples the system once a second, but
+    // only while the page is open. The UI flips `stats_open` when a tab is
+    // tapped. `AtomicBool` is a bool that several threads may read and
+    // write without a mutex.
+    let stats_open = Arc::new(AtomicBool::new(false));
+    let latest_stats: Arc<Mutex<Option<Snapshot>>> = Arc::new(Mutex::new(None));
+    let stats_thread = {
+        let open = Arc::clone(&stats_open);
+        let latest = Arc::clone(&latest_stats);
+        thread::Builder::new()
+            .name("stats".into())
+            .spawn(move || run_stats(open, latest))
+            .expect("could not start stats thread")
+    };
+    // The thread handle lets us wake the thread when the page opens.
+    let stats_waker = stats_thread.thread().clone();
+    let open_for_tabs = Arc::clone(&stats_open);
+    window.on_page_changed(move |page| {
+        let open = page == STATS_PAGE;
+        open_for_tabs.store(open, Ordering::Relaxed);
+        if open {
+            stats_waker.unpark();
+        }
+    });
+    let sample_model = Rc::new(VecModel::<StatRow>::default());
+    window.set_stats(ModelRc::from(sample_model.clone()));
+
     // --- Start the control thread with its own handles to the shared data.
     // We do not keep the thread handle: the thread loops forever and is
     // ended by the operating system when `main` returns.
@@ -810,6 +934,10 @@ fn main() -> Result<(), slint::PlatformError> {
     let shared_for_timer = Arc::clone(&shared);
     let board_for_timer = Arc::clone(&board);
     let outputs_for_timer = Arc::clone(&output_board);
+    let stats_for_timer = Arc::clone(&latest_stats);
+    // The CPU graph's history, owned by the timer closure: it is the only
+    // code that touches it, so it needs no lock.
+    let mut cpu_history: VecDeque<f64> = VecDeque::with_capacity(CPU_HISTORY_LEN);
     let timer = slint::Timer::default();
     timer.start(
         slint::TimerMode::Repeated,
@@ -831,11 +959,11 @@ fn main() -> Result<(), slint::PlatformError> {
             // closure `|s| s.measured` picks one field. `.into()` converts
             // a Rust String into Slint's string type.
             let measured = history.iter().map(|s| s.measured);
-            window.set_level_path(build_path(measured, pv_max).into());
+            window.set_level_path(build_path(measured, pv_max, HISTORY_LEN).into());
             let setpoints = history.iter().map(|s| s.setpoint);
-            window.set_setpoint_path(build_path(setpoints, pv_max).into());
+            window.set_setpoint_path(build_path(setpoints, pv_max, HISTORY_LEN).into());
             let outputs = history.iter().map(|s| s.output);
-            window.set_output_path(build_path(outputs, 1.0).into());
+            window.set_output_path(build_path(outputs, 1.0, HISTORY_LEN).into());
 
             // `.last()` returns an Option: the history is empty at first.
             if let Some(latest) = history.last() {
@@ -856,6 +984,23 @@ fn main() -> Result<(), slint::PlatformError> {
             // its press.
             update_rows(&sensor_model, sensor_rows(&board_for_timer));
             update_rows(&output_model, output_rows(&outputs_for_timer));
+
+            // Stats page: show a new snapshot when the stats thread has one.
+            // `take()` empties the slot, so each snapshot is shown once.
+            if window.get_page() == STATS_PAGE {
+                if let Some(snapshot) = stats_for_timer.lock().unwrap().take() {
+                    if cpu_history.len() == CPU_HISTORY_LEN {
+                        cpu_history.pop_front();
+                    }
+                    cpu_history.push_back(snapshot.cpu_percent.unwrap_or(f64::NAN));
+                    let cpu = cpu_history.iter().copied();
+                    window.set_cpu_path(build_path(cpu, 100.0, CPU_HISTORY_LEN).into());
+                    update_rows(&sample_model, stat_rows(&snapshot));
+                }
+            } else if !cpu_history.is_empty() {
+                // Closed: start a fresh graph next time it opens.
+                cpu_history.clear();
+            }
         },
     );
 
@@ -967,6 +1112,241 @@ fn run_control_loop(
     }
 }
 
+/// The stats thread: sample once a second while the Stats page is open,
+/// sleep otherwise.
+fn run_stats(open: Arc<AtomicBool>, latest: Arc<Mutex<Option<Snapshot>>>) {
+    let mut sampler = Sampler::new();
+    loop {
+        if !open.load(Ordering::Relaxed) {
+            // Sleep until the UI calls `unpark()`. A parked thread uses no
+            // CPU at all.
+            thread::park();
+            // Rates (CPU %, network speed) compare two samples. Take a
+            // fresh first sample so they do not span the time the page
+            // was closed.
+            sampler.reset();
+            sampler.sample();
+            thread::sleep(Duration::from_millis(300));
+            continue;
+        }
+        let snapshot = sampler.sample();
+        *latest.lock().unwrap() = Some(snapshot);
+        thread::sleep(Duration::from_secs(1));
+    }
+}
+
+/// The lines of the Stats page, from one snapshot.
+fn stat_rows(s: &Snapshot) -> Vec<StatRow> {
+    let mut rows = Vec::new();
+    // Small helpers to keep the list below readable. A closure can capture
+    // `rows` mutably only one at a time, so these are plain functions that
+    // take it as a parameter.
+    fn heading(rows: &mut Vec<StatRow>, text: &str) {
+        rows.push(StatRow {
+            heading: true,
+            label: text.into(),
+            value: SharedString::new(),
+            level: 0,
+        });
+    }
+    fn line(rows: &mut Vec<StatRow>, label: &str, value: String, level: i32) {
+        rows.push(StatRow {
+            heading: false,
+            label: label.into(),
+            value: value.into(),
+            level,
+        });
+    }
+    // "n/a" for a value that could not be read.
+    let or_na = |value: Option<String>| value.unwrap_or_else(|| "n/a".to_string());
+
+    heading(&mut rows, "System");
+    line(&mut rows, "Model", or_na(s.model.clone()), 0);
+    line(&mut rows, "Uptime", or_na(s.uptime_s.map(format_duration)), 0);
+
+    heading(&mut rows, "CPU");
+    let cpu = s.cpu_percent;
+    line(
+        &mut rows,
+        "Usage",
+        or_na(cpu.map(|c| format!("{c:.0} %"))),
+        level_above(cpu, 80.0, 95.0),
+    );
+    if !s.core_percent.is_empty() {
+        let cores: Vec<String> = s.core_percent.iter().map(|c| format!("{c:.0}")).collect();
+        line(&mut rows, "Per core", format!("{} %", cores.join(" · ")), 0);
+    }
+    line(
+        &mut rows,
+        "Load average",
+        or_na(s.load.map(|l| format!("{:.2}  {:.2}  {:.2}", l[0], l[1], l[2]))),
+        0,
+    );
+    line(
+        &mut rows,
+        "Clock",
+        or_na(s.clock_mhz.map(|c| match s.max_clock_mhz {
+            Some(max) => format!("{c:.0} of {max:.0} MHz"),
+            None => format!("{c:.0} MHz"),
+        })),
+        0,
+    );
+    line(
+        &mut rows,
+        "Temperature",
+        or_na(s.temperature_c.map(|t| format!("{t:.1} °C"))),
+        level_above(s.temperature_c, 70.0, 80.0),
+    );
+
+    heading(&mut rows, "Memory");
+    if let (Some(total), Some(available)) = (s.mem_total_mb, s.mem_available_mb) {
+        let level = if available < 50.0 {
+            2
+        } else if available < 150.0 {
+            1
+        } else {
+            0
+        };
+        line(
+            &mut rows,
+            "RAM used",
+            format!("{:.0} of {total:.0} MB", total - available),
+            level,
+        );
+        line(&mut rows, "RAM available", format!("{available:.0} MB"), level);
+    }
+    if let (Some(total), Some(free)) = (s.swap_total_mb, s.swap_free_mb) {
+        line(&mut rows, "Swap used", format!("{:.0} of {total:.0} MB", total - free), 0);
+    }
+    let app = match (s.app_memory_mb, s.app_cpu_percent) {
+        (Some(mb), Some(cpu)) => Some(format!("{mb:.0} MB · {cpu:.1} % CPU")),
+        (Some(mb), None) => Some(format!("{mb:.0} MB")),
+        _ => None,
+    };
+    line(&mut rows, "This app", or_na(app), 0);
+
+    heading(&mut rows, "Storage");
+    if let (Some(total), Some(used)) = (s.disk_total, s.disk_used) {
+        let percent = used as f64 / total as f64 * 100.0;
+        line(
+            &mut rows,
+            "SD card",
+            format!(
+                "{:.1} of {:.1} GB ({percent:.0} %)",
+                used as f64 / 1e9,
+                total as f64 / 1e9
+            ),
+            level_above(Some(percent), 85.0, 95.0),
+        );
+    } else {
+        line(&mut rows, "SD card", "n/a".into(), 0);
+    }
+
+    heading(&mut rows, "Network");
+    if s.network.is_empty() {
+        line(&mut rows, "Interfaces", "n/a".into(), 0);
+    }
+    for net in &s.network {
+        let mut parts = vec![if net.up { "up" } else { "down" }.to_string()];
+        if let Some(speed) = net.speed_mbps {
+            parts.push(format!("{speed} Mb/s"));
+        }
+        if let Some(ssid) = &net.ssid {
+            parts.push(ssid.clone());
+        }
+        if let Some(dbm) = net.signal_dbm {
+            parts.push(format!("{dbm:.0} dBm"));
+        }
+        if let Some(address) = &net.address {
+            parts.push(address.clone());
+        }
+        line(&mut rows, &net.name, parts.join(" · "), 0);
+        if let (true, Some(rx), Some(tx)) = (net.up, net.rx_rate, net.tx_rate) {
+            line(
+                &mut rows,
+                &format!("{} traffic", net.name),
+                format!("↓ {}  ↑ {}", format_rate(rx), format_rate(tx)),
+                0,
+            );
+        }
+    }
+
+    heading(&mut rows, "Power");
+    match s.throttle {
+        Some(t) => {
+            let (text, level) = flag_text(t.under_voltage_now, t.under_voltage_since_boot);
+            line(&mut rows, "Under-voltage", text, level);
+            let (text, level) = flag_text(t.slowed_now, t.slowed_since_boot);
+            line(&mut rows, "CPU slowed", text, level);
+            let (text, level) = flag_text(t.temp_limit_now, t.temp_limit_since_boot);
+            line(&mut rows, "Heat limit", text, level);
+        }
+        None => line(&mut rows, "Supply state", "n/a".into(), 0),
+    }
+    line(
+        &mut rows,
+        "Core voltage",
+        or_na(s.core_volts.map(|v| format!("{v:.3} V"))),
+        0,
+    );
+    match s.pmic {
+        Some(p) => line(
+            &mut rows,
+            "Input / power",
+            format!("{:.2} V · {:.1} W", p.input_volts, p.board_watts),
+            0,
+        ),
+        None => line(&mut rows, "Current, power", "not measurable on a Pi 4".into(), 0),
+    }
+    // Fixed ratings, so the live values above have something to compare to.
+    line(&mut rows, "Supply rating", "5.1 V × 3 A = 15.3 W".into(), 0);
+    line(&mut rows, "USB ports", "1.2 A in total, shared".into(), 0);
+
+    rows
+}
+
+/// 0 normal, 1 warning above `warn`, 2 problem above `bad`.
+fn level_above(value: Option<f64>, warn: f64, bad: f64) -> i32 {
+    match value {
+        Some(v) if v >= bad => 2,
+        Some(v) if v >= warn => 1,
+        _ => 0,
+    }
+}
+
+/// A "now / since boot" flag pair as text and warning level.
+fn flag_text(now: bool, since_boot: bool) -> (String, i32) {
+    if now {
+        ("NOW".to_string(), 2)
+    } else if since_boot {
+        ("earlier, since boot".to_string(), 1)
+    } else {
+        ("no".to_string(), 0)
+    }
+}
+
+/// 5580 seconds -> "1 h 33 min"
+fn format_duration(seconds: f64) -> String {
+    let minutes = (seconds / 60.0) as u64;
+    let (days, hours, minutes) = (minutes / 1440, minutes / 60 % 24, minutes % 60);
+    if days > 0 {
+        format!("{days} d {hours} h {minutes} min")
+    } else {
+        format!("{hours} h {minutes} min")
+    }
+}
+
+/// Bytes per second -> "820 B/s", "1.2 KB/s", "3.4 MB/s"
+fn format_rate(bytes_per_second: f64) -> String {
+    if bytes_per_second >= 1e6 {
+        format!("{:.1} MB/s", bytes_per_second / 1e6)
+    } else if bytes_per_second >= 1e3 {
+        format!("{:.1} KB/s", bytes_per_second / 1e3)
+    } else {
+        format!("{bytes_per_second:.0} B/s")
+    }
+}
+
 /// The line under the plot: live numbers, or why the output is what it is.
 fn status_text(settings: &Settings, latest: &Sample, output_error: Option<String>) -> String {
     let unit = settings.input.unit();
@@ -988,7 +1368,16 @@ fn status_text(settings: &Settings, latest: &Sample, output_error: Option<String
 }
 
 /// Copy new rows into a model, touching only the rows that differ.
-fn update_rows(model: &VecModel<DeviceRow>, rows: Vec<DeviceRow>) {
+///
+/// `<T: Clone + PartialEq + 'static>` makes this work for any row type
+/// that can be copied and compared, like a C++ template with constraints.
+fn update_rows<T: Clone + PartialEq + 'static>(model: &VecModel<T>, rows: Vec<T>) {
+    // A different number of rows (a network interface appeared): replace
+    // the whole list.
+    if model.row_count() != rows.len() {
+        model.set_vec(rows);
+        return;
+    }
     for (index, row) in rows.into_iter().enumerate() {
         if model.row_data(index).as_ref() != Some(&row) {
             model.set_row_data(index, row);
@@ -1080,9 +1469,10 @@ fn format_reading(info: &SensorInfo, values: &[f64]) -> String {
 /// so the caller can pass any of the plotted series without first copying
 /// them into a separate list.
 ///
-/// `max_value` is the value drawn at the top edge of the plot. A NaN value
-/// (no reading) leaves a gap: the next real value starts a new line.
-fn build_path(values: impl Iterator<Item = f64>, max_value: f64) -> String {
+/// `max_value` is the value drawn at the top edge of the plot, and `slots`
+/// the number of samples a full plot holds. A NaN value (no reading)
+/// leaves a gap: the next real value starts a new line.
+fn build_path(values: impl Iterator<Item = f64>, max_value: f64, slots: usize) -> String {
     let mut path = String::new();
     // Is the pen on the paper, i.e. does the next point continue a line?
     let mut drawing = false;
@@ -1095,7 +1485,7 @@ fn build_path(values: impl Iterator<Item = f64>, max_value: f64) -> String {
         }
 
         // Oldest sample at the left edge; a full history spans the width.
-        let x = index as f64 / (HISTORY_LEN - 1) as f64 * PLOT_WIDTH;
+        let x = index as f64 / (slots - 1) as f64 * PLOT_WIDTH;
 
         // Screen y grows downwards, so flip it. Keep a small margin so a
         // line at exactly 0 or max is not cut in half by the plot edge.
@@ -1118,13 +1508,13 @@ mod tests {
 
     #[test]
     fn empty_history_gives_empty_path() {
-        assert_eq!(build_path(std::iter::empty(), 1.0), "");
+        assert_eq!(build_path(std::iter::empty(), 1.0, HISTORY_LEN), "");
     }
 
     #[test]
     fn path_starts_with_move_then_draws_lines() {
         // A Vec can be turned into an iterator with `into_iter()`.
-        let path = build_path(vec![0.0, 1.0].into_iter(), 1.0);
+        let path = build_path(vec![0.0, 1.0].into_iter(), 1.0, HISTORY_LEN);
         // Zero is at the bottom (y near 100), the maximum at the top.
         assert!(path.starts_with("M 0.0 98.0 L "));
         assert!(path.trim_end().ends_with(" 2.0"));
@@ -1132,14 +1522,14 @@ mod tests {
 
     #[test]
     fn values_outside_the_range_stay_inside_the_plot() {
-        let path = build_path(vec![-5.0, 99.0].into_iter(), 1.0);
+        let path = build_path(vec![-5.0, 99.0].into_iter(), 1.0, HISTORY_LEN);
         assert!(path.starts_with("M 0.0 98.0 "));
         assert!(path.trim_end().ends_with(" 2.0"));
     }
 
     #[test]
     fn missing_readings_leave_a_gap() {
-        let path = build_path(vec![0.0, f64::NAN, 1.0].into_iter(), 1.0);
+        let path = build_path(vec![0.0, f64::NAN, 1.0].into_iter(), 1.0, HISTORY_LEN);
         // Two separate lines, each starting with "M", and no "NaN" text.
         assert_eq!(path.matches('M').count(), 2);
         assert!(!path.contains("NaN"));
@@ -1150,6 +1540,25 @@ mod tests {
         let dht = &SENSORS[sensors::SensorId::Dht22 as usize];
         let text = format_reading(dht, &[21.44, 40.0]);
         assert_eq!(text, "Temperature 21.4 °C\nHumidity 40.0 %");
+    }
+
+    #[test]
+    fn stats_formatting() {
+        assert_eq!(format_duration(5580.0), "1 h 33 min");
+        assert_eq!(format_duration(90_000.0), "1 d 1 h 0 min");
+        assert_eq!(format_rate(820.0), "820 B/s");
+        assert_eq!(format_rate(1234.0), "1.2 KB/s");
+        assert_eq!(level_above(Some(75.0), 70.0, 80.0), 1);
+        assert_eq!(level_above(None, 70.0, 80.0), 0);
+    }
+
+    #[test]
+    fn empty_snapshot_shows_not_available() {
+        let rows = stat_rows(&Snapshot::default());
+        let model = rows.iter().find(|r| r.label == "Model").unwrap();
+        assert_eq!(model.value, "n/a");
+        let power = rows.iter().find(|r| r.label == "Current, power").unwrap();
+        assert_eq!(power.value, "not measurable on a Pi 4");
     }
 
     #[test]
