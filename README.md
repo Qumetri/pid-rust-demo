@@ -127,7 +127,26 @@ Start at the top. Each file builds on the ones before it.
 | `src/hw/i2c.rs`, `pwm.rs` | Talking to Linux hardware | `unsafe` (one small block), `Drop` as a destructor |
 | `src/outputs/` | Pumps and DAC | trait objects, `let ... else`, safe shutdown |
 | `src/stats.rs` | System statistics | parsing text, `HashMap`, running helper programs |
-| `src/bin/ui.rs` | The touchscreen program | Slint markup, models, timers, closures, thread parking |
+| `src/bin/ui/window.slint` | The screen layout | Slint markup: properties, callbacks, layouts, repeaters |
+| `src/bin/ui/main.rs` | Start-up of the touchscreen program | creating the window, closures, `Arc::clone`, timers |
+| `src/bin/ui/control.rs` | Settings and the control loop | shared state, `match` on tuples, the fixed-rate loop |
+| `src/bin/ui/plot.rs`, `cards.rs`, `stats_page.rs` | What each page shows | iterators, generics, thread parking |
+
+## Where to change things
+
+| To change | Look in |
+|---|---|
+| Starting gains, setpoint, mode | `starting_settings` in `src/bin/ui/main.rs` |
+| Control rate, plot length | `DT`, `HISTORY_SECONDS` in `src/bin/ui/control.rs` |
+| A sensor's pins, rate, units or range | `SENSORS` in `src/sensors/mod.rs`, plus the pin constant in that sensor's file |
+| Ultrasonic mounting height | `MOUNT_HEIGHT_CM` in `src/sensors/ultrasonic.rs` |
+| Flow sensor calibration | `PULSES_PER_LITRE` in `src/sensors/flow.rs` |
+| Pump PWM frequency | `PWM_HZ` in `src/outputs/pump.rs` |
+| Which outputs the Control page offers | `choices` in `src/outputs/mod.rs` |
+| Layout, colours, sizes, slider ranges | `src/bin/ui/window.slint` |
+| Stats warning thresholds | `stat_rows` in `src/bin/ui/stats_page.rs` |
+| The simulated tank | `WaterTank::new` in `src/plant.rs` |
+| Adding a sensor | the steps at the top of `src/sensors/mod.rs` |
 
 ## Exercises
 
@@ -140,8 +159,8 @@ does not build.
    command-line argument. Nothing in `run_control_loop` should need to change.
 4. After `thread::spawn` in `main.rs`, try to use `controller` again. Read the error: this is the ownership rule that
    makes threads safe.
-5. Add a "Reset gains" button to the Tuning page that restores the starting gains. This touches the markup, a new
-   callback and `main` in `src/bin/ui.rs`.
+5. Add a "Reset gains" button to the Tuning page that restores the starting gains. This touches `window.slint` (a
+   button and a callback) and `src/bin/ui/main.rs` (connecting the callback).
 6. Show the DHT-22 temperature in the status line on the Control page. The value is already on the `SensorBoard`.
 7. Add the e-stop sense input (GPIO22, see `docs/IO-MAP.md`) as a new sensor in `src/sensors/`. The Sensors page and
    the control loop pick it up from the `SENSORS` list.

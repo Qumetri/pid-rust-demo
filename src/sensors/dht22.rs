@@ -32,9 +32,8 @@ pub struct Dht22 {
 
 impl Dht22 {
     pub fn open() -> Result<Self, String> {
-        Self::find_in(Path::new(IIO_DEVICES)).ok_or_else(|| {
-            "kernel driver not loaded: add dtoverlay=dht11,gpiopin=4".to_string()
-        })
+        Self::find_in(Path::new(IIO_DEVICES))
+            .ok_or_else(|| "kernel driver not loaded: add dtoverlay=dht11,gpiopin=4".to_string())
     }
 
     /// Look through the IIO devices for the DHT driver's one.

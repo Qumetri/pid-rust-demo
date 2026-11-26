@@ -29,7 +29,8 @@ const PWM_CLASS: &str = "/sys/class/pwm";
 /// the ARM). Its sysfs path contains this text.
 const PI4_PWM0: &str = "fe20c000.pwm";
 
-pub const NOT_ENABLED: &str = "PWM not enabled: add dtoverlay=pwm-2chan,pin=12,func=4,pin2=13,func2=4";
+pub const NOT_ENABLED: &str =
+    "PWM not enabled: add dtoverlay=pwm-2chan,pin=12,func=4,pin2=13,func2=4";
 
 /// Find the Pi's own PWM controller among the pwmchipN entries.
 fn find_chip() -> Option<PathBuf> {

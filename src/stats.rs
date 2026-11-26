@@ -5,8 +5,9 @@
 //! a few small helper programs (`vcgencmd`, `ip`, `df`, `iwgetid`). Nothing
 //! here needs extra crates or root rights.
 //!
-//! The Stats page only samples while it is open (see src/bin/ui.rs), about
-//! once a second, so it costs nothing the rest of the time.
+//! The Stats page only samples while it is open (see
+//! src/bin/ui/stats_page.rs), about once a second, so it costs nothing the
+//! rest of the time.
 //!
 //! On other systems (the window demo on a Mac or PC) the files do not
 //! exist: every value then simply reads as "n/a".
@@ -146,8 +147,7 @@ impl Sampler {
         let mut s = Snapshot {
             model: read("/proc/device-tree/model")
                 .map(|m| m.trim_end_matches('\0').trim().to_string()),
-            uptime_s: read("/proc/uptime")
-                .and_then(|t| t.split_whitespace().next()?.parse().ok()),
+            uptime_s: read("/proc/uptime").and_then(|t| t.split_whitespace().next()?.parse().ok()),
             load: read("/proc/loadavg").and_then(|t| parse_loadavg(&t)),
             clock_mhz: read_number("/sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq")
                 .map(|khz| khz / 1000.0),
@@ -343,7 +343,11 @@ pub fn parse_loadavg(text: &str) -> Option<[f64; 3]> {
         .take(3)
         .filter_map(|x| x.parse().ok())
         .collect();
-    (v.len() == 3).then(|| [v[0], v[1], v[2]])
+    if v.len() == 3 {
+        Some([v[0], v[1], v[2]])
+    } else {
+        None
+    }
 }
 
 /// "MemTotal:  926648 kB" lines -> map of name to kB. Also reads the
@@ -481,7 +485,10 @@ mod tests {
         let m = parse_meminfo("MemTotal:  926648 kB\nMemAvailable:  369664 kB\nPss:   91908 kB\n");
         assert_eq!(m["MemTotal"], 926648.0);
         assert_eq!(m["Pss"], 91908.0);
-        assert_eq!(parse_loadavg("0.24 0.23 0.30 1/234 5678"), Some([0.24, 0.23, 0.30]));
+        assert_eq!(
+            parse_loadavg("0.24 0.23 0.30 1/234 5678"),
+            Some([0.24, 0.23, 0.30])
+        );
     }
 
     #[test]
@@ -531,6 +538,9 @@ mod tests {
         assert_eq!(r.input_volts, 5.1);
         assert!((r.board_watts - (1.0 + 0.33)).abs() < 1e-9);
         // A Pi 4 prints an error instead.
-        assert_eq!(parse_pmic("error=1 error_msg=\"Command not registered\""), None);
+        assert_eq!(
+            parse_pmic("error=1 error_msg=\"Command not registered\""),
+            None
+        );
     }
 }

@@ -172,7 +172,7 @@ directly instead of going through a window manager.
   - main page: live plot, mode and sensor selectors, setpoint, auto/manual switch;
   - second page: gains and toggles.
 - **The same UI runs in a normal window on a Mac or PC,** so it can be built against the simulator first. This demo's
-  `src/bin/ui.rs` already works this way.
+  `src/bin/ui/` already works this way.
 - **Don't compile on the Pi.** It is slow with 1 GB, so cross-compile on another machine. Cross-compiling against the
   system libraries is a little fiddly to set up the first time. *Found: compiling on the Pi works with `-j1`, and
   rebuilds after code changes take about 1–1.5 minutes. The first build is the slow part, and two parallel jobs run

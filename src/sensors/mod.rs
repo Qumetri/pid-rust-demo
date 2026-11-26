@@ -247,6 +247,9 @@ impl SensorStatus {
 
     pub fn health(&self, stale_after: Duration) -> Health {
         let fresh = self.last_ok.is_some_and(|t| t.elapsed() <= stale_after);
+        // Matching on a tuple checks several values at once. The arms are
+        // tried from top to bottom, `_` matches anything, and `if ...`
+        // after a pattern adds an extra condition (a "match guard").
         match (self.enabled, fresh, &self.error) {
             (false, _, _) => Health::Off,
             (true, true, _) => Health::Ok,

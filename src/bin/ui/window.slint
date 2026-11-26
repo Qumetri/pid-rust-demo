@@ -1,0 +1,624 @@
+// The touchscreen layout, in Slint's own markup language.
+//
+// The Rust program (main.rs) compiles this file at build time. Slint then
+// generates Rust types for everything marked `export`:
+//   MainWindow  the window, with a getter and setter for every property
+//               (`set_kp`, `get_auto`, ...) and an `on_...` method for every
+//               callback;
+//   DeviceRow, StatRow  plain structs the Rust code fills in.
+// Typos here are compile errors in the Rust build.
+//
+// How data flows:
+//   `in property`      Rust writes it, the screen shows it
+//   `in-out property`  the screen changes it (a slider), Rust reads it
+//   `callback`         the screen calls Rust (a tap, a moved slider)
+//
+// Sizes are logical pixels. The touchscreen runs at scale factor 2, so its
+// 720 x 1280 pixels are a 360 x 640 logical screen; the desktop window
+// uses the same size so it previews the panel layout.
+//
+// Tip: the Slint extension for VS Code shows a live preview of this file.
+
+import { Slider, ComboBox, VerticalBox, HorizontalBox, Switch, ScrollView, Palette } from "std-widgets.slint";
+
+// One card on the Sensors page, for a sensor or an output. `export`
+// makes Slint generate a matching Rust struct, `DeviceRow`.
+export struct DeviceRow {
+    name: string,
+    wiring: string,
+    // What it is for, e.g. "Monitoring only".
+    role: string,
+    // Live values, one per line; empty when there is nothing to show.
+    reading: string,
+    // "OK", "Off", "Idle", or the error message.
+    status: string,
+    // 0 off/idle, 1 starting, 2 ok, 3 failing: the status dot colour.
+    health: int,
+    // Sensors have an on/off switch; outputs follow the selection.
+    has-switch: bool,
+    enabled: bool,
+}
+
+// One line on the Stats page: a section heading, or a label and a
+// value. Generates the Rust struct `StatRow`.
+export struct StatRow {
+    heading: bool,
+    label: string,
+    value: string,
+    // 0 normal, 1 warning (amber), 2 problem (red).
+    level: int,
+}
+
+// A reusable row: name on the left, slider in the middle, value on the right.
+component LabeledSlider inherits HorizontalBox {
+    in property <string> label;
+    in property <float> minimum: 0;
+    in property <float> maximum: 1;
+    in property <int> decimals: 2;
+    // Shown after the value, e.g. "%" or "s".
+    in property <string> suffix;
+    // `scale` multiplies the shown value: 100 shows 0..1 as 0..100 %.
+    in property <float> scale: 1;
+    in property <bool> enabled: true;
+    // `in-out` = both the Rust code and this component may change it.
+    in-out property <float> value;
+    callback changed();
+
+    padding: 0;
+    // Tall enough to hit with a finger.
+    min-height: 44px;
+    Text {
+        text: root.label;
+        width: 96px;
+        vertical-alignment: center;
+        opacity: root.enabled ? 1 : 0.6;
+    }
+    Slider {
+        minimum: root.minimum;
+        maximum: root.maximum;
+        enabled: root.enabled;
+        // `<=>` is a two-way binding: moving the slider updates
+        // `value`, and setting `value` moves the slider.
+        value <=> root.value;
+        changed => { root.changed(); }
+    }
+    Text {
+        text: (root.value * root.scale).to-fixed(root.decimals) + root.suffix;
+        width: 56px;
+        horizontal-alignment: right;
+        vertical-alignment: center;
+    }
+}
+
+// A label and a drop-down list in one row.
+component LabeledComboBox inherits HorizontalLayout {
+    in property <string> label;
+    in property <[string]> model;
+    in-out property <int> current-index;
+    callback selected();
+
+    spacing: 8px;
+    min-height: 44px;
+    Text {
+        text: root.label;
+        width: 96px;
+        vertical-alignment: center;
+    }
+    ComboBox {
+        model: root.model;
+        current-index <=> root.current-index;
+        selected => { root.selected(); }
+    }
+}
+
+// A label and an on/off switch in one row.
+component LabeledSwitch inherits HorizontalLayout {
+    in property <string> label;
+    in-out property <bool> checked;
+    callback toggled();
+
+    min-height: 44px;
+    Text {
+        text: root.label;
+        horizontal-stretch: 1;
+        vertical-alignment: center;
+    }
+    Switch {
+        checked <=> root.checked;
+        toggled => { root.toggled(); }
+    }
+}
+
+// One line of the plot. The line itself is an SVG path string that
+// the Rust code regenerates about 30 times per second.
+component PlotLine inherits Path {
+    width: 100%;
+    height: 100%;
+    // The Rust code draws in a fixed 1000 x 100 coordinate system;
+    // `fit: fill` stretches that to whatever size the window has.
+    viewbox-width: 1000;
+    viewbox-height: 100;
+    fit: fill;
+    stroke-width: 2px;
+}
+
+// A large button for touch: page tabs and two-way choices.
+// `active` draws it highlighted.
+component TouchButton inherits Rectangle {
+    in property <string> text;
+    in property <bool> active;
+    callback clicked();
+
+    min-height: 44px;
+    horizontal-stretch: 1;
+    border-radius: 8px;
+    border-width: 1px;
+    border-color: Palette.border;
+    background: root.active ? Palette.accent-background
+        : touch.pressed ? Palette.border
+        : Palette.control-background;
+
+    Text {
+        text: root.text;
+        font-size: 14px;
+        color: root.active ? Palette.accent-foreground : Palette.control-foreground;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        wrap: word-wrap;
+    }
+    // `touch :=` names the element so the background above can ask
+    // whether it is being pressed.
+    touch := TouchArea {
+        clicked => { root.clicked(); }
+    }
+}
+
+// A bold heading for a group of controls.
+component Heading inherits Text {
+    font-size: 15px;
+    font-weight: 700;
+}
+
+// One sensor or output: what it is, how it is wired, its state and
+// live values, and for sensors a switch to turn it on or off.
+component DeviceCard inherits Rectangle {
+    in property <DeviceRow> device;
+    callback toggled(bool);
+
+    background: Palette.alternate-background;
+    border-radius: 8px;
+
+    HorizontalLayout {
+        padding: 12px;
+        spacing: 8px;
+
+        VerticalLayout {
+            spacing: 4px;
+            horizontal-stretch: 1;
+
+            Text {
+                text: root.device.name;
+                font-size: 15px;
+                font-weight: 700;
+                wrap: word-wrap;
+            }
+            Text {
+                text: root.device.wiring;
+                font-size: 11px;
+                wrap: word-wrap;
+                opacity: 0.7;
+            }
+            Text {
+                text: root.device.role;
+                font-size: 11px;
+                wrap: word-wrap;
+                opacity: 0.7;
+            }
+            HorizontalLayout {
+                spacing: 6px;
+                VerticalLayout {
+                    alignment: center;
+                    Rectangle {
+                        width: 10px;
+                        height: 10px;
+                        border-radius: 5px;
+                        background: root.device.health == 2 ? #3fb950
+                            : root.device.health == 3 ? #f85149
+                            : root.device.health == 1 ? #d29922
+                            : #6e7681;
+                    }
+                }
+                Text {
+                    text: root.device.status;
+                    wrap: word-wrap;
+                    horizontal-stretch: 1;
+                }
+            }
+            if root.device.reading != "" : Text {
+                text: root.device.reading;
+                font-size: 18px;
+            }
+        }
+        if root.device.has-switch : VerticalLayout {
+            alignment: center;
+            Switch {
+                checked: root.device.enabled;
+                toggled => { root.toggled(self.checked); }
+            }
+        }
+    }
+}
+
+// One line of the Stats page. Headings are bold and have more space
+// above them.
+component StatLine inherits HorizontalLayout {
+    in property <StatRow> line;
+
+    spacing: 8px;
+    padding-top: root.line.heading ? 10px : 0px;
+    // Headings need room for the larger bold text plus the gap above.
+    min-height: root.line.heading ? 34px : 22px;
+    Text {
+        text: root.line.label;
+        width: root.line.heading ? 300px : 104px;
+        font-size: root.line.heading ? 15px : 13px;
+        font-weight: root.line.heading ? 700 : 400;
+        vertical-alignment: center;
+    }
+    Text {
+        text: root.line.value;
+        font-size: 13px;
+        horizontal-stretch: 1;
+        horizontal-alignment: right;
+        vertical-alignment: center;
+        wrap: word-wrap;
+        color: root.line.level == 2 ? #f85149
+            : root.line.level == 1 ? #d29922
+            : Palette.foreground;
+    }
+}
+
+export component MainWindow inherits Window {
+    title: "PID controller";
+    preferred-width: 360px;
+    preferred-height: 640px;
+
+    // --- Written by Rust, read by the UI.
+    in property <string> level-path;
+    in property <string> setpoint-path;
+    in property <string> output-path;
+    in property <string> status;
+    in property <[DeviceRow]> sensors;
+    in property <[DeviceRow]> outputs;
+    // Stats page: the lines, and the CPU graph as an SVG path.
+    in property <[StatRow]> stats;
+    in property <string> cpu-path;
+    // Choices for the input and output drop-downs.
+    in property <[string]> input-names;
+    in property <[string]> output-names;
+    // Unit and range of the selected input: the setpoint slider and
+    // the plot follow them.
+    in property <string> pv-unit: "cm";
+    in property <float> pv-max: 40;
+
+    // --- Written by the UI, read by Rust when `settings-changed` fires.
+    // Control page
+    in-out property <bool> auto: true;
+    in-out property <float> setpoint: 20;
+    // In manual: the output set by hand. In auto: Rust keeps it equal
+    // to the live output, so switching to manual starts from there.
+    in-out property <float> manual-output;
+    in-out property <float> disturbance;
+    in-out property <int> input-index: 0;
+    in-out property <int> output-index: 0;
+    // Tuning page
+    in-out property <int> mode-index: 3;
+    in-out property <float> kp;
+    in-out property <float> ki;
+    in-out property <float> kd;
+    in-out property <bool> inverted;
+    in-out property <bool> anti-windup: true;
+    in-out property <float> d-filter;
+    in-out property <float> out-min: 0;
+    in-out property <float> out-max: 1;
+    callback settings-changed();
+    callback sensor-toggled(int, bool);
+    // Fired when a tab is tapped, so Rust can start or stop the stats.
+    callback page-changed(int);
+
+    // Which page is shown: 0 Control, 1 Tuning, 2 Sensors, 3 Stats.
+    in-out property <int> page: 0;
+
+    VerticalBox {
+        // ---------------------------------------------------------------
+        // Page 0: Control.
+        // `if` creates the page only while the condition holds. The
+        // values live in the root properties above, so nothing is lost
+        // when switching pages.
+        if root.page == 0 : VerticalLayout {
+            spacing: 6px;
+            vertical-stretch: 1;
+
+            // Plot area
+            Rectangle {
+                background: #14181d;
+                border-radius: 6px;
+                min-height: 120px;
+                vertical-stretch: 1;
+                clip: true;
+
+                PlotLine { commands: root.output-path;   stroke: #5c6773; }
+                PlotLine { commands: root.setpoint-path; stroke: #e0af68; }
+                PlotLine { commands: root.level-path;    stroke: #4fc1ff; }
+
+                // Scale of the measurement axis.
+                Text {
+                    x: 6px;
+                    y: 4px;
+                    text: root.pv-max.to-fixed(0) + " " + root.pv-unit;
+                    font-size: 11px;
+                    color: #8b949e;
+                }
+            }
+
+            HorizontalLayout {
+                spacing: 12px;
+                Text { text: "— measured"; color: #4fc1ff; }
+                Text { text: "— setpoint"; color: #e0af68; }
+                Text { text: "— output";   color: #5c6773; }
+            }
+            // Live numbers, the manual warning, and any output problem.
+            Text {
+                text: root.status;
+                wrap: word-wrap;
+            }
+
+            HorizontalLayout {
+                spacing: 8px;
+                TouchButton {
+                    text: "Auto";
+                    active: root.auto;
+                    clicked => {
+                        root.auto = true;
+                        root.settings-changed();
+                    }
+                }
+                TouchButton {
+                    text: "Manual";
+                    active: !root.auto;
+                    clicked => {
+                        root.auto = false;
+                        root.settings-changed();
+                    }
+                }
+            }
+            LabeledSlider {
+                label: "Setpoint " + root.pv-unit;
+                maximum: root.pv-max;
+                decimals: 1;
+                value <=> root.setpoint;
+                changed => { root.settings-changed(); }
+            }
+            // Moves by itself in auto (showing the output), by hand in manual.
+            LabeledSlider {
+                label: root.auto ? "Output" : "Output (hand)";
+                enabled: !root.auto;
+                decimals: 0;
+                scale: 100;
+                suffix: " %";
+                value <=> root.manual-output;
+                changed => { root.settings-changed(); }
+            }
+            LabeledSlider {
+                label: "Disturbance";
+                decimals: 0;
+                scale: 100;
+                suffix: " %";
+                value <=> root.disturbance;
+                changed => { root.settings-changed(); }
+            }
+            LabeledComboBox {
+                label: "Input";
+                model: root.input-names;
+                current-index <=> root.input-index;
+                selected => { root.settings-changed(); }
+            }
+            LabeledComboBox {
+                label: "Output to";
+                model: root.output-names;
+                current-index <=> root.output-index;
+                selected => { root.settings-changed(); }
+            }
+        }
+
+        // ---------------------------------------------------------------
+        // Page 1: Tuning.
+        if root.page == 1 : VerticalLayout {
+            spacing: 6px;
+            vertical-stretch: 1;
+
+            LabeledComboBox {
+                label: "Mode";
+                model: ["P", "PI", "PD", "PID"];
+                current-index <=> root.mode-index;
+                selected => { root.settings-changed(); }
+            }
+            LabeledSlider {
+                label: "Kp";
+                maximum: 1;
+                value <=> root.kp;
+                changed => { root.settings-changed(); }
+            }
+            LabeledSlider {
+                label: "Ki";
+                maximum: 0.5;
+                value <=> root.ki;
+                changed => { root.settings-changed(); }
+            }
+            LabeledSlider {
+                label: "Kd";
+                maximum: 0.5;
+                value <=> root.kd;
+                changed => { root.settings-changed(); }
+            }
+
+            Heading { text: "Action"; }
+            HorizontalLayout {
+                spacing: 8px;
+                TouchButton {
+                    text: "Normal";
+                    active: !root.inverted;
+                    clicked => {
+                        root.inverted = false;
+                        root.settings-changed();
+                    }
+                }
+                TouchButton {
+                    text: "Inverted";
+                    active: root.inverted;
+                    clicked => {
+                        root.inverted = true;
+                        root.settings-changed();
+                    }
+                }
+            }
+            Text {
+                text: root.inverted
+                    ? "More output lowers the value (drain pump, cooling)"
+                    : "More output raises the value (filling pump, heater)";
+                font-size: 12px;
+                wrap: word-wrap;
+                opacity: 0.7;
+            }
+
+            LabeledSwitch {
+                label: "Anti-windup";
+                checked <=> root.anti-windup;
+                toggled => { root.settings-changed(); }
+            }
+            LabeledSlider {
+                label: "D filter";
+                maximum: 2;
+                decimals: 1;
+                suffix: " s";
+                value <=> root.d-filter;
+                changed => { root.settings-changed(); }
+            }
+
+            Heading { text: "Output limits"; }
+            LabeledSlider {
+                label: "Minimum";
+                decimals: 0;
+                scale: 100;
+                suffix: " %";
+                value <=> root.out-min;
+                changed => { root.settings-changed(); }
+            }
+            LabeledSlider {
+                label: "Maximum";
+                decimals: 0;
+                scale: 100;
+                suffix: " %";
+                value <=> root.out-max;
+                changed => { root.settings-changed(); }
+            }
+
+            // Pushes the controls to the top.
+            Rectangle { vertical-stretch: 1; }
+        }
+
+        // ---------------------------------------------------------------
+        // Page 2: Sensors and outputs. Longer than the screen, so it
+        // scrolls: drag it up and down with a finger.
+        if root.page == 2 : ScrollView {
+            vertical-stretch: 1;
+
+            VerticalLayout {
+                spacing: 10px;
+
+                Heading { text: "Controller input"; }
+                LabeledComboBox {
+                    label: "Input";
+                    model: root.input-names;
+                    current-index <=> root.input-index;
+                    selected => { root.settings-changed(); }
+                }
+
+                Heading { text: "Sensors"; }
+                // A repeater: one card per entry in `sensors`. `i` is
+                // the index, `device` the entry.
+                for device[i] in root.sensors : DeviceCard {
+                    device: device;
+                    toggled(on) => { root.sensor-toggled(i, on); }
+                }
+
+                Heading { text: "Outputs"; }
+                for device in root.outputs : DeviceCard {
+                    device: device;
+                }
+            }
+        }
+
+        // ---------------------------------------------------------------
+        // Page 3: Stats. Rust only samples while this page is open.
+        if root.page == 3 : ScrollView {
+            vertical-stretch: 1;
+
+            VerticalLayout {
+                spacing: 2px;
+                // Keep the values clear of the scroll bar.
+                padding-right: 12px;
+
+                Heading { text: "CPU usage, last 60 s"; }
+                Rectangle {
+                    background: #14181d;
+                    border-radius: 6px;
+                    height: 80px;
+                    clip: true;
+
+                    PlotLine { commands: root.cpu-path; stroke: #3fb950; }
+                    Text {
+                        x: 6px;
+                        y: 4px;
+                        text: "100 %";
+                        font-size: 11px;
+                        color: #8b949e;
+                    }
+                }
+                for line in root.stats : StatLine {
+                    line: line;
+                }
+                Text {
+                    text: "Updated every second while this page is open.";
+                    font-size: 11px;
+                    opacity: 0.6;
+                }
+            }
+        }
+
+        // --- Page tabs, always at the bottom.
+        HorizontalLayout {
+            spacing: 6px;
+            TouchButton {
+                text: "Control";
+                active: root.page == 0;
+                clicked => { root.page = 0; root.page-changed(0); }
+            }
+            TouchButton {
+                text: "Tuning";
+                active: root.page == 1;
+                clicked => { root.page = 1; root.page-changed(1); }
+            }
+            TouchButton {
+                text: "Sensors";
+                active: root.page == 2;
+                clicked => { root.page = 2; root.page-changed(2); }
+            }
+            TouchButton {
+                text: "Stats";
+                active: root.page == 3;
+                clicked => { root.page = 3; root.page-changed(3); }
+            }
+        }
+    }
+}

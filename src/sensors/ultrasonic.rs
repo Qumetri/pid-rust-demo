@@ -70,10 +70,8 @@ impl Ultrasonic {
     pub fn open() -> Result<Self, String> {
         use gpiocdev::line::{EdgeDetection, Value};
 
-        let trig = gpiocdev::find_named_line(TRIG_LINE)
-            .ok_or(format!("{TRIG_LINE} not found"))?;
-        let echo = gpiocdev::find_named_line(ECHO_LINE)
-            .ok_or(format!("{ECHO_LINE} not found"))?;
+        let trig = gpiocdev::find_named_line(TRIG_LINE).ok_or(format!("{TRIG_LINE} not found"))?;
+        let echo = gpiocdev::find_named_line(ECHO_LINE).ok_or(format!("{ECHO_LINE} not found"))?;
 
         // One request holds both lines. Each `with_line` selects a line,
         // and the settings after it apply to that line only.
@@ -106,7 +104,10 @@ impl Ultrasonic {
         let deadline = std::time::Instant::now() + timeout;
         loop {
             let left = deadline.saturating_duration_since(std::time::Instant::now());
-            let ready = self.request.wait_edge_event(left).map_err(|e| e.to_string())?;
+            let ready = self
+                .request
+                .wait_edge_event(left)
+                .map_err(|e| e.to_string())?;
             if !ready {
                 return Err(format!("no echo {what}: check wiring and power"));
             }
