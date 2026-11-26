@@ -7,6 +7,10 @@ project it prepares for.
 Library versions and maintenance status were checked against crates.io and GitHub on **26 November 2026**. Everything
 else is from the planning sessions. Hardware behaviour marked *unverified* has not been tried on the real parts yet.
 
+**Update, 26 November 2026:** the screen, touch and the UI are now running on the real Pi. What was decided and
+verified that day is in [§11](#11-bring-up-on-the-pi-26-november-2026). The step-by-step setup is in
+[`PI-SETUP.md`](PI-SETUP.md), and every pin in [`IO-MAP.md`](IO-MAP.md).
+
 ## 1. Goal and requirements
 
 - A PID controller built on a **Raspberry Pi 4B with 1 GB RAM**, in a Fibox EKPE 130 G enclosure.
@@ -44,7 +48,7 @@ else is from the planning sessions. Hardware behaviour marked *unverified* has n
 | Layer | Choice |
 |---|---|
 | OS | Raspberry Pi OS Lite 64-bit, no desktop |
-| Hardware I/O | `rppal` or `linux-embedded-hal` (see §6 on `rppal` being archived) |
+| Hardware I/O | **Chosen:** `gpiocdev` for GPIO, plus the kernel's own drivers (DHT through IIO, PWM through sysfs, I2C through `/dev/i2c-1`). See §11 |
 | Local UI | Slint on its `linuxkms` backend, with touch input |
 | Web add-on | `axum` with a WebSocket, and a static page using uPlot embedded in the binary |
 | Config and logs | TOML for profiles, gains and setpoints; CSV for run logs |
@@ -57,7 +61,8 @@ else is from the planning sessions. Hardware behaviour marked *unverified* has n
 - **A web UI in a Chromium kiosk as the main screen** is too heavy: Chromium alone takes 300–400 MB on a 1 GB board and
   starts slowly.
 - **Rust native** uses roughly 30–60 MB of RAM, has no GC pauses, starts in seconds and deploys as one file. All of
-  these are estimates; nothing has been measured on the Pi yet.
+  these are estimates; nothing has been measured on the Pi yet. *Measured: 92 MB resident, of which 26 MB is the
+  app's own; about 5–8 % of one core with the plot running.*
 - **Python for the sensors with Rust for the screen** was asked about and rejected. The ultrasonic and flow sensors
   depend on precise pulse timing, and a separate process would bring the jitter back. It would also add a second
   language and a link between the two programs that can fail. The split is still possible if writing drivers in
@@ -147,17 +152,19 @@ directly instead of going through a window manager.
    wiring.
 3. **Graphics driver:** keep `dtoverlay=vc4-kms-v3d` in `/boot/firmware/config.txt` (the default).
 4. **Panel overlay:** current releases normally detect the panel automatically. If not, add
-   `dtoverlay=vc4-kms-dsi-ili9881-5inch`. The same overlay also handles touch.
+   `dtoverlay=vc4-kms-dsi-ili9881-5inch`. The same overlay also handles touch. *Verified: auto-detection did not work
+   on the Pi 4; the overlay was needed.*
 5. **Runtime libraries:** install Mesa (GBM/EGL), `libinput`, `libudev` and `libxkbcommon` with `apt`.
 6. **Build and run:** enable Slint's `backend-linuxkms-noseat` feature (available in Slint 1.19) and run with
-   `SLINT_BACKEND=linuxkms`.
+   `SLINT_BACKEND=linuxkms`. *Verified with `SLINT_BACKEND=linuxkms-femtovg` and the `kms` cargo feature.*
 7. **Rotation:** for landscape mounting, set `SLINT_KMS_ROTATION=90` or `270`.
 8. **Autostart:** start the program from a systemd service at boot and disable the login prompt on that screen.
 
 ### Things to know
 
 - **Touch rotation is unverified.** It is not known whether touch follows the display rotation automatically. If it
-  does not, the panel overlay accepts touch-axis swap and invert options.
+  does not, the panel overlay accepts touch-axis swap and invert options. *Verified for portrait: touch matches the
+  display with no settings. Landscape is still untested.*
 - **There is no on-screen keyboard.** Gains and setpoints need a numeric pad drawn in Slint, or the physical keypad.
 - **The pixels are small: about 290 per inch.** Run Slint with a scale factor of about 2, which gives a working area of
   roughly 360 × 640 logical pixels (640 × 360 in landscape). That fits one plot and a row of controls per page, so
@@ -167,7 +174,9 @@ directly instead of going through a window manager.
 - **The same UI runs in a normal window on a Mac or PC,** so it can be built against the simulator first. This demo's
   `src/bin/ui.rs` already works this way.
 - **Don't compile on the Pi.** It is slow with 1 GB, so cross-compile on another machine. Cross-compiling against the
-  system libraries is a little fiddly to set up the first time.
+  system libraries is a little fiddly to set up the first time. *Found: compiling on the Pi works with `-j1`, and
+  rebuilds after code changes take about 1–1.5 minutes. The first build is the slow part, and two parallel jobs run
+  out of memory. Cross-compiling from Windows (WSL2) is planned, see [`PI-SETUP.md`](PI-SETUP.md).*
 
 ## 6. Rust libraries for the parts (checked 26 November 2026)
 
@@ -263,8 +272,8 @@ The Pi plan keeps the same web design (uPlot, WebSocket, batched binary frames) 
 |---|---|
 | 0. Warm-up demo (this repo): PID against a simulated tank, terminal and Slint window with live plot and sliders | **Done** (12 November 2026). 12 unit tests pass on Linux. The window was rendered off-screen for the README screenshot; clicking through it on macOS was not tested |
 | 1. Skeleton: `pid` crate, simulated plant, unit tests | Not started; the demo's `src/pid.rs` and `src/plant.rs` are the starting point |
-| 2. Local UI: live plot of setpoint, measured value and output; gain and setpoint editing | Not started |
-| 3. Real drivers: one sensor and one actuator first | Not started |
+| 2. Local UI: live plot of setpoint, measured value and output; gain and setpoint editing | **Running on the Touch Display 2** (26 November 2026): Control, Tuning, Sensors and Stats pages; auto/manual, input and output selection, disturbance, P/PI/PD/PID, action, anti-windup, D filter, limits; live system stats. Starts at boot (`deploy/pid-ui.service`) |
+| 3. Real drivers: one sensor and one actuator first | Drivers written for ultrasonic, flow, DHT-22, MPU6050, both pumps and the DAC; not yet tried on the real parts. See [`IO-MAP.md`](IO-MAP.md) |
 | 4. Web page | Not started |
 | 5. Logging, saved profiles, systemd autostart, safety behaviour, watchdog | Not started |
 
@@ -273,8 +282,72 @@ The Pi plan keeps the same web design (uPlot, WebSocket, batched binary frames) 
 - How many pumps, and is there one tank or two? This decides the simulator and how realistic the cascade demo is.
 - Is the MCP4725 the external controller output, with the VMA409 only for the demo pumps?
 - What does the GY-521 measure in the rig?
-- Is the screen mounted portrait or landscape?
+- Is the screen mounted portrait or landscape? (The UI is portrait for now.)
 - Should analogue external sensors (0–10 V, 4–20 mA) be supported? That means adding the ADS1115.
 - Is the web page view-only, or may it change gains? Control over the network needs authentication and more care.
-- `rppal` (archived, works today, supports both `embedded-hal` versions) or `linux-embedded-hal` (maintained, needs
-  adapters or own drivers for three parts)?
+- ~~`rppal` or `linux-embedded-hal`?~~ Neither: `gpiocdev` plus kernel drivers and small drivers of our own (§11).
+- Keypad: add an MCP23017 I2C expander, or use an on-screen number pad? The pins run out otherwise
+  ([`IO-MAP.md`](IO-MAP.md)).
+- Pulses per litre of the WPSE470 flow sensor: not found in any datasheet; to be calibrated.
+
+## 11. Bring-up on the Pi (26 November 2026)
+
+### Software as built
+
+```mermaid
+flowchart TB
+    subgraph app["One Rust program: target/release/ui"]
+        UI["UI thread<br/>Slint, linuxkms, touch"]
+        CTRL["Control thread<br/>PID at 20 Hz"]
+        SENS["4 sensor threads<br/>own rate each"]
+        STATS["Stats thread<br/>parked unless its tab is open"]
+        SB[(SensorBoard)]
+        OB[(OutputBoard)]
+        SH[(Settings and history)]
+    end
+    SENS --> SB --> CTRL
+    UI -->|settings| SH --> CTRL
+    CTRL -->|samples| SH --> UI
+    CTRL --> OB --> UI
+    SB --> UI
+    STATS --> UI
+    CTRL -->|"sysfs PWM, I2C"| HW["Pumps, DAC"]
+    SYSTEMD["systemd: pid-ui.service"] -->|"start at boot, restart on crash"| app
+    SYSTEMD -->|"after stop: ui --safe-outputs"| HW
+```
+
+### Decisions
+
+- **GPIO and drivers:** not `rppal` (archived) nor `linux-embedded-hal`, but:
+  - `gpiocdev` for GPIO: maintained, and gives kernel-timestamped edge events, which the ultrasonic and flow drivers
+    rely on;
+  - the kernel's own drivers where they exist: DHT through the `dht11` IIO driver, PWM through sysfs, I2C through
+    `/dev/i2c-1`;
+  - small own drivers for the MPU6050 and MCP4725 (a few register reads and writes each), which avoids the
+    `embedded-hal` 0.2/1.0 mismatch completely.
+- **Pin plan:** chosen to keep I2C, hardware PWM (GPIO12/13) and the serial console (GPIO14/15) free. Details in
+  [`IO-MAP.md`](IO-MAP.md).
+- **VMA409 direction inputs wired fixed**, PWM on the enable inputs only. The pumps run one way, and this saves four
+  pins.
+- **Pump B is the disturbance**, set by hand, so the demo shows load rejection.
+- **Monitoring only:** the DHT-22 (as planned) and the GY-521 (until its role is decided).
+- **Four pages** instead of two: Control, Tuning, Sensors, Stats. One page could not hold everything at a
+  touch-friendly size.
+
+### Findings
+
+- **The ribbon cable must be in the DISPLAY port.** In the CAMERA port the kernel reports `-121` on the panel's I2C
+  bus and no display output appears at all, not even HDMI.
+- **`/sys/class/pwm/pwmchip0` is the touchscreen backlight**, not GPIO PWM. The pump driver finds the right block by
+  its hardware address.
+- **The kernel names the DHT device `dht11@4`**, not `dht11`. An early driver version missed it.
+- **The Pi 4 cannot measure current or input power.** `vcgencmd pmic_read_adc` is Pi 5 only. The Stats tab shows
+  under-voltage and throttling flags instead.
+- **The serial console runs on GPIO14/15** (`console=serial0` in `cmdline.txt`), so those pins stay free.
+- **The panel's I2C bus is internal** (bus 10, through the ribbon cable), so it does not use GPIO2/3.
+
+### Not done yet
+
+- Kernel lines in `config.txt` for I2C, the DHT driver and PWM (waiting for approval).
+- Testing every driver on the real parts.
+- Cascade and feedforward modes; e-stop sense, buttons and LEDs; on-screen calibration; saved profiles; watchdog.
