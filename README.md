@@ -7,6 +7,9 @@ terminal, and in a window with a live plot and sliders.
 
 ![Window demo](docs/ui.png)
 
+Plans, findings and open questions for the real project are in
+[`docs/PROJECT-NOTES.md`](docs/PROJECT-NOTES.md).
+
 Every file is heavily commented: the comments explain both what the code
 does and why it is written that way, with C++ comparisons where useful.
 
